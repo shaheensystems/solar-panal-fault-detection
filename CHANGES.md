@@ -19,13 +19,13 @@ logic, etc.) were left untouched.
 | MobileNetV2 | 93.22% | **80.43%** |
 | EfficientNet-Lite | 91.53% | **78.26%** |
 | VGG16 | 91.53% | **69.57%** |
-| ShuffleNetV2 | 27.12% | **21.74%** (unchanged conclusion: near-random, no pretraining) |
+| ShuffleNetV2 | 27.12% (from scratch) | **63.04%** (now genuinely pretrained — see Issue 5) |
 
-The ranking/story is unchanged (MobileNetV2 best trade-off, ShuffleNetV2 fails without
-pretraining) — but every accuracy number in the report is inflated because it was
-measured on data the training pipeline had already leaked into, or on validation data
-used for model selection. Full per-model precision/recall/F1, resource usage, and TFLite
-numbers are in `output/RESULTS.md`.
+Three of the four numbers are lower because they were previously measured on leaked or
+validation-selected data (Issues 1–2). ShuffleNetV2's number moved the other direction —
+it now has real pretrained ImageNet weights it never had before, so 63.04% is a
+substantially *stronger*, and for the first time genuinely comparable, result. Full
+per-model precision/recall/F1, resource usage, and TFLite numbers are in `output/RESULTS.md`.
 
 ---
 
@@ -94,23 +94,67 @@ as the other three models (trainable head now ~3K params instead of ~6.4M).
 (post-fix)" to match the other rows; the 14.7M total-parameter figure in `output/RESULTS.md`
 already reflects this (vs. the thesis's 21.14M, which included the old oversized head).
 
-## Issue 5 — ShuffleNetV2 not comparable to the other three (no pretraining)
-**Thesis sections affected:** Table 4 (ShuffleNetV2 row says "Pre-trained ImageNet
-weights" — **this is not true**), §4.3.3, §5.6 *EDA effect on Performance* / Table 14
-*Transfer Learning Accuracy*, Figure 29.
+## Issue 5 — ShuffleNetV2 not comparable to the other three (no pretraining) — RESOLVED
 
-We specifically checked for a trustworthy TensorFlow/Keras ImageNet-pretrained
-ShuffleNetV2 checkpoint. None exists officially; the only one found is an unofficial,
-unmaintained **TensorFlow 1.10** `tf.estimator` checkpoint on a personal Google Drive
-link (68.8% top-1, no provenance guarantee), which would need a manual, error-prone
-weight-by-weight conversion into Keras 3. That risk/reward was rejected.
-**Fix:** ShuffleNetV2 stays trained from scratch (as it already was), `class_weight` was
-added to both its training phases for consistency with the other models, and the code now
-contains an explicit comment recording this decision.
-**Where to edit the thesis:** Table 4's ShuffleNetV2 "Transfer Learning" cell should read
-"None available (trained from scratch)" instead of "Pre-trained ImageNet weights" — this
-actually *strengthens* §5.6/Table 14's own argument, since it's the genuine cause of
-ShuffleNetV2's 21.7% result, not a training bug.
+**Thesis sections affected:** Table 4 (ShuffleNetV2 "Transfer Learning" row — now
+genuinely true), §4.3.3, §5.6 *EDA effect on Performance* / Table 14 *Transfer Learning
+Accuracy*, Figure 29 (**retired**, see below), Table 12 *computational overhead metrics*.
+
+**Original finding:** no official TensorFlow/Keras ImageNet-pretrained ShuffleNetV2
+checkpoint exists. The only one initially found was an unofficial, unmaintained
+**TensorFlow 1.10** `tf.estimator` checkpoint on a personal Google Drive link (68.8%
+top-1, no provenance guarantee), which was rejected as too risky to convert.
+
+**Follow-up (this session, on request):** torchvision does officially maintain a
+pretrained ShuffleNetV2 x1.0 checkpoint (69.4% ImageNet top-1, hosted on
+`download.pytorch.org`, part of torchvision's maintained model zoo — a genuinely
+trustworthy source, unlike the TF1 Google Drive checkpoint). It was converted to Keras 3
+and **validated to machine precision** against the original PyTorch model (cosine
+similarity 1.0, max absolute difference ~1.8×10⁻⁷ on backbone feature vectors — see
+`scripts/convert_shufflenet_weights.py` for the full conversion + validation code).
+
+The conversion required rebuilding ShuffleNetV2's block from scratch, because the
+original from-scratch implementation in this notebook had **two real architecture bugs**
+that also happened to be *why* no direct weight transplant into it was ever possible:
+
+1. Its internal bottleneck width was `out_channels // 4`; the real ShuffleNetV2 (and the
+   pretrained weights) use `out_channels // 2` throughout — a bottleneck twice as narrow
+   as the actual architecture.
+2. Its stride-1 residual path processed the **full** input feature map; real ShuffleNetV2
+   splits the input in half and only processes one half (`x2`), keeping the other (`x1`)
+   as an identity shortcut — the "channel split" that gives ShuffleNet its efficiency.
+
+Two further PyTorch→TensorFlow porting pitfalls had to be fixed before the conversion
+validated (each initially produced a plausible-but-wrong result — cosine similarity 0.84,
+then 0.999, before reaching 1.0): TF's `padding='same'` is not always identical to
+PyTorch's explicit symmetric `padding=1` for stride>1 convs (fixed with explicit
+`ZeroPadding2D` + `'valid'`), and Keras's `BatchNormalization` defaults to
+`epsilon=1e-3` vs PyTorch's `1e-5` (small per-layer drift that compounds across 112 BN
+layers into a real difference).
+
+**Fix:** ShuffleNetV2 now uses the same frozen-backbone + augmentation + class_weight +
+single-phase training recipe as the other three models (the old two-phase/label-smoothing/
+cosine-LR scheme was a from-scratch-only workaround, no longer needed). Test accuracy rose
+from 21.74% (near-random) to **63.04%**. The pretrained backbone is committed at
+`pretrained/shufflenetv2_x1_0_imagenet_backbone.keras` (5.8 MB); the notebook loads it
+directly and never needs `torch`/`torchvision` at runtime — those are only required to
+re-run the one-time conversion script.
+
+**Where to edit the thesis:**
+
+- Table 4's ShuffleNetV2 row can now honestly say "Pre-trained ImageNet weights
+  (torchvision conversion)".
+- Table 12 / §5.4 computational-overhead discussion should note ShuffleNetV2's unusually
+  high one-time graph-compilation cost on CPU (see `output/RESULTS.md` §3) — real, and an
+  interesting practical-deployment finding distinct from its accuracy.
+- **Figure 29 / the RQ4 "Transfer Learning Effect" chart no longer has data to show** —
+  it specifically compared "with" vs "without" pretraining using ShuffleNetV2 as the sole
+  "without" data point. With all four models now pretrained, that comparison group is
+  gone. The notebook cell that used to produce Figure 29 now prints an explanatory note
+  instead of a chart (see the retired-chart entry below) — §5.6/Table 14 need to either
+  drop this specific figure or reframe RQ4 using the *historical* from-scratch result
+  (21.74% vs 63.04%, both real measurements taken during this work, see
+  `output/RESULTS.md` §5) as a point-in-time ablation rather than a live chart.
 
 ## Issue 6 — Hard-coded Raspberry Pi results, no measurement artefacts in the repo
 **Thesis sections affected:** §3.8 *Edge Deployment Methodology* (whole section describes
@@ -156,6 +200,18 @@ is accurate now, whereas before it was a mislabelled EfficientNetB0.
 ## Issue 8 — Dead scaffolding cell
 Deleted a no-op cell that only existed to preserve cell numbering after an earlier draft
 was removed. No thesis impact — this was a repo-cleanliness issue, not a results issue.
+
+## Radar chart updated; Transfer Learning Effect chart retired (consequence of Issue 5)
+**Thesis sections affected:** Figure 20/28-style radar chart (now shows all four models
+instead of three), Figure 29 (retired — see Issue 5 above for the full explanation).
+
+The multi-metric radar chart (`output/radar_chart_metrics.png`) previously excluded
+ShuffleNetV2 with the comment "no pretraining, not comparable" — it now includes all four
+models, since that's no longer true. The "Transfer Learning Effect" chart
+(`transfer_learning_effect.png`) is retired: its notebook cell now prints an explanatory
+note instead of generating a chart, since there is no longer a non-pretrained model to
+form the "without transfer learning" comparison group. See Issue 5 for what to do about
+this in the thesis text.
 
 ---
 
@@ -212,6 +268,13 @@ crashing partway through and actually producing the numbers in `output/RESULTS.m
 - `solar_panel_fault_detection.ipynb` — all fixes above, executed cleanly top-to-bottom,
   zero error outputs remaining.
 - `requirements.txt` — added, pins the exact package versions used for this run.
+- `pretrained/shufflenetv2_x1_0_imagenet_backbone.keras` — the validated, converted
+  pretrained ShuffleNetV2 backbone (5.8 MB), loaded directly by the notebook. No
+  `torch`/`torchvision` needed at notebook-run time.
+- `scripts/convert_shufflenet_weights.py` — the one-time conversion script that produced
+  the file above, with the full validation methodology documented in its docstring. Only
+  needed if you want to reproduce or re-derive the conversion; requires
+  `pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu`.
 - `output/` — all figures (PNG), `final_resource_summary.csv`, TFLite models
   (`output/tflite/*.tflite`), saved model weights/SavedModels, `RESULTS.md`.
 - `dataset_split/` — the physical 70/15/15 split created by `splitfolders` (train/val/test

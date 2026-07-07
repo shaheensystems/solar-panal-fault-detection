@@ -7,6 +7,9 @@ this same `output/` folder as PNG files, ready to drop into the thesis document.
 Dataset: 875 images, 6 classes, split 70/15/15 (stratified) →
 **Train: 605 · Validation: 126 · Test: 138** images.
 
+All four models now use genuine ImageNet-pretrained backbones (see CHANGES.md, Issue 5,
+for how ShuffleNetV2 got real pretrained weights via a validated torchvision conversion).
+
 ---
 
 ## 1. Dataset / EDA
@@ -45,12 +48,11 @@ inverse to class frequency in the train split):
 | **MobileNetV2** | **80.43%** | 0.83 | 0.81 | 0.81 | 2,265,670 | 25 |
 | EfficientNet-Lite0 | 78.26% | 0.79 | 0.80 | 0.79 | 3,420,710 (7,686 head + 3,413,024 frozen TF-Hub backbone) | 25 |
 | VGG16 | 69.57% | 0.71 | 0.70 | 0.70 | 14,717,766 | 25 |
-| ShuffleNetV2 (no pretraining) | 21.74% | 0.04 | 0.17 | 0.06 | 1,317,538 | 20 (early-stopped) |
+| ShuffleNetV2 | 63.04% | 0.68 | 0.65 | 0.64 | 1,275,934 (6,150 head + 1,269,784 frozen pretrained backbone) | 25 |
 
 Figures: `resource_usage_lightweight_vs_heavyweight.png`, `params_vs_accuracy_scatter.png`,
-`confusion_matrices_all_models.png`, `f1_per_class_all_models.png`, `radar_chart_metrics.png`
-(MobileNetV2/EfficientNet-Lite/VGG16 only — ShuffleNetV2 excluded, see below),
-`transfer_learning_effect.png`, `dual_axis_params_accuracy.png`.
+`confusion_matrices_all_models.png`, `f1_per_class_all_models.png`,
+`radar_chart_metrics.png` (now includes all four models), `dual_axis_params_accuracy.png`.
 
 Per-class breakdown (precision / recall / F1), from the notebook's own printed
 `classification_report`:
@@ -64,9 +66,12 @@ Electrical-damage 0.80/0.94/0.86, Physical-Damage 0.64/0.82/0.72, Snow-Covered 1
 **VGG16** — Bird-drop 0.75/0.60/0.67, Clean 0.55/0.73/0.63, Dusty 0.69/0.60/0.64,
 Electrical-damage 0.79/0.88/0.83, Physical-Damage 0.50/0.55/0.52, Snow-Covered 1.00/0.85/0.92.
 
-**ShuffleNetV2** — collapsed to predicting "Clean" for almost everything (0.22/1.00/0.36 on
-Clean, ~0 elsewhere) — a textbook symptom of training a 6-class classifier from scratch
-on ~600 images with no pretrained backbone.
+**ShuffleNetV2** (pretrained) — Bird-drop 0.73/0.37/0.49, Clean 0.51/0.77/0.61,
+Dusty 0.61/0.63/0.62, Electrical-damage 0.76/0.94/0.84, Physical-Damage 0.47/0.64/0.54,
+Snow-Covered 1.00/0.55/0.71 — a real, comparable result now that it shares genuine
+pretrained weights with the other three models, though still the weakest of the four
+(its ImageNet top-1 of 69.4% is itself below MobileNetV2's/EfficientNet-Lite0's, so a
+lower fine-tuned result here is consistent with that starting point, not a training bug).
 
 ---
 
@@ -74,10 +79,20 @@ on ~600 images with no pretrained backbone.
 
 | Model | Train time (s) | RAM Δ (MB) | Peak RAM (MB) | Inference (ms/img, in-memory Keras) |
 |---|---|---|---|---|
-| MobileNetV2 | 38.4 | 672.2 | 1584.3 | 23.34 |
-| EfficientNet-Lite0 | 12.3 | 95.3 | 1836.5 | 23.05 |
-| VGG16 | 32.1 | 824.3 | 2782.9 | 194.91 |
-| ShuffleNetV2 | 14.9 | 82.6 | 1850.3 | 15.92 |
+| MobileNetV2 | 20.5 | 726.4 | 1586.4 | 17.91 |
+| EfficientNet-Lite0 | 5.0 | 94.4 | 1777.4 | 17.03 |
+| VGG16 | 52.4 | 102.9 | 1858.8 | 251.63 |
+| ShuffleNetV2 | 518.7 | −616.4 | 1892.1 | 9.84 |
+
+ShuffleNetV2's 518.7s "training time" is misleading if read as per-epoch training cost —
+almost all of it is a **one-time TensorFlow graph-tracing/compilation overhead** unique to
+this architecture's ~500 small, fragmented ops (many tiny Conv2D/DepthwiseConv2D/BatchNorm
+layers per block × 17 blocks), not slower per-batch computation. Once compiled, it has the
+**fastest** inference of all four models (9.84 ms/img in-memory, 15.71 ms/img as TFLite) —
+consistent with ShuffleNetV2's actual design goal of being FLOP/latency-efficient at
+inference time, at the cost of graph complexity. This is a real, reportable finding about
+the practical cost of ShuffleNetV2's architecture on general-purpose (non-mobile,
+non-XLA-compiled) hardware, distinct from its accuracy.
 
 `vram_delta_mb` is 0.0 for all models because no GPU is present in this environment —
 the notebook's VRAM tracker (`pynvml`) never activates. Training-time figures above are
@@ -88,10 +103,10 @@ for the thesis's GPU-based timing tables.
 
 | Model | TFLite file size | TFLite test accuracy | ms/img (TFLite, single-thread-limited interpreter) |
 |---|---|---|---|
-| MobileNetV2 | 4.5 MB | 79.71% | 20.07 |
-| EfficientNet-Lite0 | 6.8 MB | 78.26% | 25.52 |
-| ShuffleNetV2 | 2.7 MB | 21.74% | 11.56 |
-| VGG16 | 29.5 MB | 69.57% | 734.74 |
+| MobileNetV2 | 4.5 MB | 79.71% | 26.37 |
+| EfficientNet-Lite0 | 6.8 MB | 78.26% | 32.43 |
+| ShuffleNetV2 | 2.7 MB | 63.04% | 15.71 |
+| VGG16 | 29.5 MB | 69.57% | 465.88 |
 
 TFLite files are in `output/tflite/*.tflite`. These are float16-quantised conversions of
 the exact models evaluated above — **not** measured on a Raspberry Pi (no physical device
@@ -101,17 +116,19 @@ in this environment; see CHANGES.md, Issue 6).
 
 ## 5. Headline takeaways (for the abstract / conclusion)
 
-- MobileNetV2 remains the best accuracy/efficiency trade-off among the three
-  *pretrained* models (80.4% test accuracy, smallest of the three at 2.27M params,
-  fastest lightweight inference), consistent with the thesis's central thesis —
-  but the actual margin over EfficientNet-Lite0 is smaller (~2.2 points) than
-  previously reported, and VGG16 is not just slower but also noticeably *less*
-  accurate on genuinely held-out data (69.6% vs the previous, leakage-inflated 91.53%).
-- ShuffleNetV2's collapse (21.7%, barely above the 16.7% random baseline for 6 classes)
-  is a **transfer-learning-availability** finding, not an architecture weakness — see
-  Issue 5 in CHANGES.md. No trustworthy ImageNet-pretrained TensorFlow/Keras ShuffleNetV2
-  checkpoint could be located; it is trained from scratch and excluded from head-to-head
-  architecture rankings.
+- MobileNetV2 remains the best accuracy/efficiency trade-off among the four pretrained
+  models (80.4% test accuracy, smallest of the top three at 2.27M params, fastest overall
+  practical inference), consistent with the thesis's central thesis — but the actual
+  margin over EfficientNet-Lite0 is smaller (~2.2 points) than previously reported, and
+  VGG16 is not just slower but also noticeably *less* accurate on genuinely held-out data
+  (69.6% vs the previous, leakage-inflated 91.53%).
+- ShuffleNetV2 now uses genuine pretrained ImageNet weights, converted from torchvision's
+  official `shufflenet_v2_x1_0` checkpoint and validated to machine precision (cosine
+  similarity 1.0 against the original PyTorch model — see `scripts/convert_shufflenet_weights.py`
+  and CHANGES.md, Issue 5). With real pretraining its test accuracy rises from 21.74%
+  (near-random, from-scratch) to **63.04%** — direct, first-hand confirmation of how much
+  transfer learning matters on a ~600-image training set, and it is now a legitimately
+  comparable fourth data point across every chart rather than an excluded special case.
 - All numbers above are genuinely out-of-sample: `test/` was produced by a stratified
   70/15/15 split and touched by no callback, checkpoint, or tuning decision during
   training (see Issue 1/2 in CHANGES.md).
