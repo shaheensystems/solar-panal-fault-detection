@@ -1,0 +1,5 @@
+Model,Type,Params,Train Time (s),RAM Δ (MB),Peak RAM (MB),VRAM Δ (MB),Infer (ms/img),Test Accuracy
+MobileNetV2,Lightweight,2265670,38.4,672.2,1584.3,0.0,23.34,0.8043
+EfficientNet-Lite,Lightweight,3420710,12.3,95.3,1836.5,0.0,23.048,0.7826
+VGG16,Heavyweight,14717766,32.1,824.3,2782.9,0.0,194.913,0.6957
+ShuffleNetV2,Lightweight,1317538,14.9,82.6,1850.3,0.0,15.923,0.2174
