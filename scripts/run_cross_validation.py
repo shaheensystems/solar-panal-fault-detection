@@ -40,7 +40,7 @@ import tensorflow as tf
 import keras
 import tensorflow_hub as hub
 from sklearn.model_selection import StratifiedKFold, train_test_split
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix
 from sklearn.utils.class_weight import compute_class_weight
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -73,6 +73,7 @@ def log(msg):
 # ---------------------------------------------------------------------------
 class_names = sorted(d.name for d in DATA_DIR.iterdir() if d.is_dir())
 log(f"Classes: {class_names}")
+CLEAN_IDX = class_names.index("Clean")
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".gif"}
 
@@ -285,6 +286,18 @@ for model_name, builder in MODEL_BUILDERS.items():
             y_true.extend(yb.numpy().tolist())
             y_pred.extend(np.argmax(preds, axis=1).tolist())
 
+        # Fault-detection recall: of the genuinely faulty test images (true
+        # label != Clean), what fraction did the model NOT wave through as
+        # "Clean"? This is a binary catch-rate that macro precision/recall/F1
+        # don't capture (they weight "wrong fault type" the same as "missed
+        # entirely") — see output/RESULTS.md section 2a for the single-run
+        # version of this metric and why it matters for this problem.
+        cm = confusion_matrix(y_true, y_pred, labels=list(range(len(class_names))))
+        faulty_mask = np.array(y_true) != CLEAN_IDX
+        n_faulty = int(faulty_mask.sum())
+        n_missed = int(sum(1 for t, p in zip(y_true, y_pred) if t != CLEAN_IDX and p == CLEAN_IDX))
+        fault_detection_recall = (n_faulty - n_missed) / n_faulty if n_faulty else None
+
         entry = {
             "model": model_name,
             "fold": fold_idx,
@@ -297,11 +310,16 @@ for model_name, builder in MODEL_BUILDERS.items():
             "n_train": int(len(train_inner_idx)),
             "n_val": int(len(val_inner_idx)),
             "n_test": int(len(test_idx)),
+            "n_faulty": n_faulty,
+            "n_faulty_missed_as_clean": n_missed,
+            "fault_detection_recall": fault_detection_recall,
+            "confusion_matrix": cm.tolist(),
+            "class_names": class_names,
         }
         cache_path.write_text(json.dumps(entry))
         results.append(entry)
         log(f"{model_name} fold {fold_idx}: acc={entry['accuracy']:.4f} f1={entry['f1_macro']:.4f} "
-            f"({train_time:.1f}s, {entry['epochs_run']} epochs)")
+            f"fault_recall={fault_detection_recall:.4f} ({train_time:.1f}s, {entry['epochs_run']} epochs)")
 
         del model, train_ds, val_ds, test_ds
         gc.collect()

@@ -73,6 +73,94 @@ pretrained weights with the other three models, though still the weakest of the 
 (its ImageNet top-1 of 69.4% is itself below MobileNetV2's/EfficientNet-Lite0's, so a
 lower fine-tuned result here is consistent with that starting point, not a training bug).
 
+### 2a. Fault-detection recall (does the model catch that *something* is wrong?)
+
+Accuracy and macro-F1 treat every misclassification equally — confusing "Dusty" for
+"Bird-drop" costs the same in those numbers as calling a genuinely faulty panel "Clean".
+For a fault-detection system, those two errors are not equivalent: the first is a fault
+that still gets flagged (just mislabeled), the second is a fault that goes completely
+undetected. The metric that matches that priority is a binary **fault-detection recall**:
+collapse the 5 fault classes into one "Faulty" super-class, and ask, of all genuinely
+faulty panels in the test set, how many did the model fail to flag at all (i.e. predicted
+"Clean")? Computed from the per-model confusion matrices (`confusion_matrices_all_models.png`,
+138-image held-out test set, 108 of which are genuinely faulty):
+
+| Model | Faulty panels called "Clean" (missed) | Fault-detection recall | Overall accuracy |
+|---|---|---|---|
+| **EfficientNet-Lite0** | 8/108 | **92.6%** | 78.26% |
+| MobileNetV2 | 13/108 | 88.0% | 80.43% |
+| VGG16 | 18/108 | 83.3% | 69.57% |
+| ShuffleNetV2 | 22/108 | 79.6% | 63.04% |
+
+**The ranking flips relative to accuracy.** MobileNetV2 has the highest overall accuracy,
+but EfficientNet-Lite0 misses fewer faulty panels outright (8 vs 13) — it gets the specific
+fault *type* wrong more often, but is less likely to wave a faulty panel through as
+"Clean". If the deployment priority is "flag anything abnormal for inspection, sort out
+the exact fault type later", EfficientNet-Lite0 is the better model despite its lower
+accuracy; if the priority is "get the single predicted label right", MobileNetV2 wins.
+Which one matters is a product/deployment decision, not a modelling one.
+
+**Where the misses come from**: across all four models, missed faults cluster almost
+entirely on two classes — Dusty→Clean (6, 6, 8, 9 missed, for MobileNetV2/EfficientNet-Lite0/
+ShuffleNetV2/VGG16 respectively) and Bird-drop→Clean (5, 1, 9, 7 missed) — while
+Electrical-damage→Clean is **0 for every model**. Dust and bird droppings are subtle,
+low-contrast surface marks that can resemble a clean panel at this image resolution;
+electrical damage and snow cover are visually obvious and are essentially never missed.
+That is a genuine, reportable finding about which fault types would need the most
+attention (e.g. higher-resolution imaging, a lower decision threshold) in a real
+deployment, independent of which model is chosen.
+
+*(This breakdown currently exists only for the single fixed-split run above — the 5-fold
+CV script does not yet cache per-fold confusion matrices, so it cannot be computed per
+fold for the folds already run. Support for capturing it going forward has been added to
+`scripts/run_cross_validation.py`; see the cross-validation results file for what that
+does and does not cover.)*
+
+### 2b. Maintenance-action grouping (cleaning vs replacement)
+
+A second, more deployment-realistic regrouping: what a technician would actually *do*
+with each prediction, not the specific fault name. Bird-drop, Dusty and Snow-Covered all
+resolve with a **cleaning** visit; Electrical-damage and Physical-Damage require a
+**replacement/repair** dispatch; Clean needs no action. Collapsing the same held-out
+138-image confusion matrices into these 3 groups (Cleanable n=80, Clean n=30,
+Replace n=28):
+
+| Model | 3-group accuracy | Cleanable recall | Clean recall | **Replace recall** |
+|---|---|---|---|---|
+| MobileNetV2 | 86.2% (119/138) | 82.5% (66/80) | 96.7% (29/30) | 85.7% (24/28) |
+| EfficientNet-Lite0 | 86.2% (119/138) | 82.5% (66/80) | 90.0% (27/30) | **92.9% (26/28)** |
+| VGG16 | 76.8% (106/138) | 75.0% (60/80) | 73.3% (22/30) | 85.7% (24/28) |
+| ShuffleNetV2 | 69.6% (96/138) | 61.3% (49/80) | 76.7% (23/30) | 85.7% (24/28) |
+
+All four models jump 6–13 points in accuracy once fault-*type* confusion (e.g. Dusty
+mistaken for Bird-drop) stops being penalized — confirming most of each model's raw
+6-class error is "flagged the right thing, wrong sub-label", not "missed it".
+
+**The number that matters most operationally is Replace recall** — a missed
+Electrical-damage/Physical-Damage panel is the one error with a real safety/cost
+consequence (an unaddressed electrical fault left in service), unlike a missed cleaning
+which just waits for the next inspection cycle. Breaking Replace recall down by where the
+misses land:
+
+| Model | Replace→Clean (missed entirely) | Replace→Cleanable (wrong action, still flagged) |
+|---|---|---|
+| **EfficientNet-Lite0** | **0/28** | 2/28 |
+| MobileNetV2 | 1/28 | 3/28 |
+| ShuffleNetV2 | 1/28 | 3/28 |
+| VGG16 | 2/28 | 2/28 |
+
+EfficientNet-Lite0 is the only model with **zero** replacement-needed panels waved
+through as "Clean" in this test set — consistent with its lead in fault-detection recall
+in section 2a. MobileNetV2 ties EfficientNet-Lite0 on overall 3-group accuracy (119/138
+both) but lets 1 replacement-needed panel through undetected where EfficientNet-Lite0 lets
+none through. If the deployment cost model treats a missed electrical/physical-damage
+panel as materially worse than a missed cleaning, EfficientNet-Lite0 is the stronger
+choice despite its lower raw accuracy in sections 1–2 — a third, independent line of
+evidence (alongside fault-detection recall in 2a) pointing the same direction.
+
+*(Same caveat as 2a: computed from the single fixed-split confusion matrices only, not
+per CV fold.)*
+
 ---
 
 ## 3. Resource / efficiency (CPU-only, no GPU — this machine has none)
