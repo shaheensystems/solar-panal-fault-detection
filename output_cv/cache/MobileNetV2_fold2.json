@@ -1,0 +1,1 @@
+{"model": "MobileNetV2", "fold": 2, "accuracy": 0.7758620689655172, "precision_macro": 0.8232103006812309, "recall_macro": 0.7350366300366301, "f1_macro": 0.7563409838981979, "epochs_run": 20, "train_time_s": 390.0, "n_train": 590, "n_val": 105, "n_test": 174}

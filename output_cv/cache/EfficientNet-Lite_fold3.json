@@ -1,0 +1,1 @@
+{"model": "EfficientNet-Lite", "fold": 3, "accuracy": 0.6839080459770115, "precision_macro": 0.6914353190668979, "recall_macro": 0.6793454790823211, "f1_macro": 0.6777529714313274, "epochs_run": 25, "train_time_s": 347.8, "n_train": 590, "n_val": 105, "n_test": 174}

@@ -1,0 +1,1 @@
+{"model": "ShuffleNetV2", "fold": 1, "accuracy": 0.6436781609195402, "precision_macro": 0.7017283353626271, "recall_macro": 0.6638435833172674, "f1_macro": 0.660091197578642, "epochs_run": 25, "train_time_s": 338.7, "n_train": 590, "n_val": 105, "n_test": 174}

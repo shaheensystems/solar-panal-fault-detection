@@ -1,0 +1,1 @@
+{"model": "VGG16", "fold": 1, "accuracy": 0.7011494252873564, "precision_macro": 0.7154242979242978, "recall_macro": 0.7208900456268877, "f1_macro": 0.7166433631355117, "epochs_run": 25, "train_time_s": 3239.8, "n_train": 590, "n_val": 105, "n_test": 174}
